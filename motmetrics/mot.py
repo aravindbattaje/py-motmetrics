@@ -92,7 +92,7 @@ class MOTAccumulator(object):
         self.dirty_events = True
         self.cached_events_df = None
 
-    def update(self, oids, hids, dists, frameid=None):
+    def update(self, oids, hids, dists, oignores=None, frameid=None):
         """Updates the accumulator with frame specific objects/detections.
 
         This method generates events based on the following algorithm [1]:
@@ -114,6 +114,13 @@ class MOTAccumulator(object):
         dists: NxM array
             Distance matrix. np.nan values to signal do-not-pair constellations.
             See `distances` module for support methods.  
+        oignores : N array or None
+            Boolean array matching the size of ``oids``, that indicates if any
+            object needs to be ignored. This might be useful when an object
+            is tagged as occluded, and the multiple object tracking algorithm
+            can be given the benefit of MATCHing if it has the capability, or
+            disregard SWITCHes or MISSes, if it's not designed to track
+            occluded objects.
 
         Kwargs
         ------
@@ -136,6 +143,11 @@ class MOTAccumulator(object):
         oids = ma.array(oids, mask=np.zeros(len(oids)))
         hids = ma.array(hids, mask=np.zeros(len(hids)))  
         dists = np.atleast_2d(dists).astype(float).reshape(oids.shape[0], hids.shape[0]).copy()
+
+        if oignores is None:
+            oignores = np.array([False] * oids.shape[0])
+        oignores = np.array(oignores)
+        assert oignores.dtype == bool, 'Ignored objects must be boolean'
 
         if frameid is None:            
             assert self.auto_id, 'auto-id is not enabled'
@@ -187,6 +199,9 @@ class MOTAccumulator(object):
                     self._indices.append((frameid, next(eid)))
                     self._events.append(['MATCH', oids.data[i], hids.data[j], dists[i, j]])
 
+                    # If matched, we don't care about ignoring. We'll give 
+                    # the tracker the benefit of counting a MATCH
+
             # 2. Try to remaining objects/hypotheses
             dists[oids.mask, :] = np.nan
             dists[:, hids.mask] = np.nan
@@ -202,17 +217,33 @@ class MOTAccumulator(object):
                 is_switch = o in self.m and \
                             self.m[o] != h and \
                             abs(frameid - self.last_occurrence[o]) <= self.max_switch_time
-                cat = 'SWITCH' if is_switch else 'MATCH'
-                self._indices.append((frameid, next(eid)))
-                self._events.append([cat, oids.data[i], hids.data[j], dists[i, j]])
+                
+                # If not ignoring object, update normally
+                if not oignores[i]:
+                    cat = 'SWITCH' if is_switch else 'MATCH'
+                    self._indices.append((frameid, next(eid)))
+                    self._events.append([cat, oids.data[i], hids.data[j], dists[i, j]])
+                    self.m[o] = h
+                
+                # On the other hand, if ignoring object, and
+                # we have a MATCH, we'll let it through, but
+                # not count a SWITCH
+                elif not is_switch:
+                    self._indices.append((frameid, next(eid)))
+                    self._events.append(['MATCH', oids.data[i], hids.data[j], dists[i, j]])
+                    self.m[o] = h
+
+                # Ignored or not, account for the object 
+                # and hypothesis in this round
                 oids[i] = ma.masked
                 hids[j] = ma.masked
-                self.m[o] = h
 
         # 3. All remaining objects are missed
-        for o in oids[~oids.mask]:
-            self._indices.append((frameid, next(eid)))
-            self._events.append(['MISS', o, np.nan, np.nan])
+        for o, oi in zip(oids[~oids.mask], oignores[~oids.mask]):
+            # If object marked to be ignored, don't account a MISS
+            if not oi:
+                self._indices.append((frameid, next(eid)))
+                self._events.append(['MISS', o, np.nan, np.nan])
         
         # 4. All remaining hypotheses are false alarms
         for h in hids[~hids.mask]:
