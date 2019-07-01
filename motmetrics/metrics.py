@@ -220,6 +220,10 @@ def num_unique_objects(df, obj_frequencies):
     """Total number of unique object ids encountered."""
     return len(obj_frequencies)
 
+def num_unique_hypotheses(df, pred_frequencies):
+    """Total number of unique hypothesis ids encountered."""
+    return len(pred_frequencies)
+
 def num_matches(df):
     """Total number matches."""
     return df.noraw.Type.isin(['MATCH']).sum()
@@ -392,6 +396,7 @@ def create():
     m.register(num_objects, formatter='{:d}'.format)
     m.register(num_predictions, formatter='{:d}'.format)
     m.register(num_unique_objects, formatter='{:d}'.format)
+    m.register(num_unique_hypotheses, formatter='{:d}'.format)
     m.register(track_ratios)
     m.register(mostly_tracked, formatter='{:d}'.format)
     m.register(partially_tracked, formatter='{:d}'.format)
